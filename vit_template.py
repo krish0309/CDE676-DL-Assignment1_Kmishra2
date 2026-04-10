@@ -190,7 +190,18 @@ class PatchEmbedding(nn.Module):
         #   • uses kernel_size = patch_size
         #   • uses stride     = patch_size
         #   • has no padding (padding=0)
-        raise NotImplementedError("TODO 1.1: implement PatchEmbedding.__init__")
+
+        
+        # April 9, 2026 kkm.
+        self.proj = nn.Conv2d(
+            in_channels=in_chans,
+            out_channels=embed_dim,
+            kernel_size=patch_size,
+            stride=patch_size,
+            padding=0
+        )
+
+        #raise NotImplementedError("TODO 1.1: implement PatchEmbedding.__init__")
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # TODO 1.1 ── Apply self.proj to x, then reshape the output from
@@ -199,7 +210,13 @@ class PatchEmbedding(nn.Module):
         #
         #   Hint: after the conv you have shape (B, D, G, G).
         #   Call .flatten(2) to get (B, D, N), then .transpose(1, 2) for (B, N, D).
-        raise NotImplementedError("TODO 1.1: implement PatchEmbedding.forward")
+        #raise NotImplementedError("TODO 1.1: implement PatchEmbedding.forward")
+
+        x=self.prif(x)
+        x=x.flatten(2)
+        x=x.transpose(1,2)
+        return x
+    
 
 
 # ---------------------------------------------------------------------------
@@ -269,7 +286,12 @@ class MultiHeadSelfAttention(nn.Module):
 
         # TODO 1.2 ── Create the four linear layers and the dropout layer
         #   described in the docstring above.
-        raise NotImplementedError("TODO 1.2: implement MultiHeadSelfAttention.__init__")
+        #raise NotImplementedError("TODO 1.2: implement MultiHeadSelfAttention.__init__")
+        self.q_proj = nn.Linear(embed_dim, embed_dim, bias=True)
+        self.k_proj = nn.Linear(embed_dim, embed_dim, bias=True)
+        self.v_proj = nn.Linear(embed_dim, embed_dim, bias=True)
+        self.out_proj = nn.Linear(embed_dim, embed_dim, bias=True)
+        self.attn_drop = nn.Dropout(dropout)
 
     def forward(
         self, x: torch.Tensor
@@ -282,7 +304,40 @@ class MultiHeadSelfAttention(nn.Module):
         #     torch.matmul  or  the @ operator
         #     F.softmax(scores, dim=-1)
         #     tensor.transpose(1, 2).contiguous().reshape(B, T, self.embed_dim)
-        raise NotImplementedError("TODO 1.2: implement MultiHeadSelfAttention.forward")
+        #raise NotImplementedError("TODO 1.2: implement MultiHeadSelfAttention.forward")
+        B, T, D = x.shape
+        h=self.num_heads
+
+        # projecting to Q, K, V
+        Q= self.q_proj(x)
+        K= self.k_proj(x)
+        V= self.v_proj(x)
+
+        # reshaping to (B, T, h, head_dim)
+        Q= Q.reshape(B, T, h, self.head_dim).transpose(1, 2)
+        K= K.reshape(B, T, h, self.head_dim).transpose(1, 2)
+        V= V.reshape(B, T, h, self.head_dim).transpose(1, 2)
+
+
+        # scaled dot-product scores (B,h,T,T)
+        scores= Q @ K.transpose(-2, -1) * self.scale
+
+        # softmax
+        attn_weights= F.softmax(scores, dim=-1)
+
+        # dropout
+        attn_weights= self.attn_drop(attn_weights)
+
+        # weighted sum
+        context= attn_weights @ V
+        #reshaping back to (B, T, D)
+        context= context.transpose(1, 2).contiguous().reshape(B, T, D)
+
+        # o/p projection
+        out= self.out_proj(context)
+        
+        #result
+        return out, attn_weights
 
 
 # ---------------------------------------------------------------------------
