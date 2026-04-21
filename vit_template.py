@@ -51,6 +51,8 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.optim as optim
+import torch.optim.lr_scheduler as lr_scheduler
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Subset
 from torchvision import datasets, transforms
@@ -212,7 +214,7 @@ class PatchEmbedding(nn.Module):
         #   Call .flatten(2) to get (B, D, N), then .transpose(1, 2) for (B, N, D).
         #raise NotImplementedError("TODO 1.1: implement PatchEmbedding.forward")
 
-        x=self.prif(x)
+        x=self.proj(x)
         x=x.flatten(2)
         x=x.transpose(1,2)
         return x
@@ -765,68 +767,80 @@ def train_model(
     optimizer = optim.AdamW(model.parameters(), lr=config["lr"], weight_decay=1e-4)
     scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=config["epochs"])
 
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    history = []
+ 
     for epoch in range(1, config["epochs"] + 1):
+        epoch_start = time.time()
+ 
+        # --- Training ---
         model.train()
-        train_loss = 0.0
+        total_loss = 0.0
+        num_batches = 0
         for images, labels in train_loader:
-            images, labels = images.to(device), labels.to(device)
             optimizer.zero_grad()
             logits, _ = model(images)
             loss = F.cross_entropy(logits, labels)
             loss.backward()
             optimizer.step()
-            train_loss += loss.item()
-
-        train_loss /= len(train_loader)
+            total_loss += loss.item()
+            num_batches += 1
+ 
+        train_loss = total_loss / num_batches
 
         # Validate
         model.eval()
-        val_accuracy = 0.0
+        correct = 0
+        total = 0
         with torch.no_grad():
             for images, labels in test_loader:
-                images, labels = images.to(device), labels.to(device)
                 logits, _ = model(images)
                 preds = logits.argmax(dim=1)
-                val_accuracy += (preds == labels).float().mean().item()
-
-        val_accuracy /= len(test_loader)
-
-        # Log
-        epoch_time_sec = time.time() - start_time
-        log_entry = {
-            "epoch": epoch,
-            "train_loss": round(train_loss, 4),
-            "val_accuracy": round(val_accuracy, 4),
-            "epoch_time_sec": round(epoch_time_sec, 4),
-        }
-        print(log_entry)
+                correct += (preds == labels).sum().item()
+                total += labels.size(0)
+        val_accuracy = correct / total
+ 
+        scheduler.step()
+ 
+        epoch_time = time.time() - epoch_start
+ 
+        history.append({
+            "epoch":          epoch,
+            "train_loss":     round(train_loss, 4),
+            "val_accuracy":   round(val_accuracy, 4),
+            "epoch_time_sec": round(epoch_time, 4),
+        })
+ 
+        print(
+            f"  Epoch {epoch:2d}/{config['epochs']}  "
+            f"loss={train_loss:.4f}  val_acc={val_accuracy:.4f}  "
+            f"time={epoch_time:.1f}s"
+        )
+ 
 
         # Checkpoint
         if epoch in checkpoint_epochs:
+            ckpt_path = os.path.join(checkpoint_dir, f"baseline_epoch_{epoch}.pt")
             torch.save({
                 "model_state_dict": model.state_dict(),
                 "config":           model.config,
                 "epoch":            epoch,
                 "student_id":       STUDENT_ID,
-            }, f"{checkpoint_dir}/baseline_epoch_{epoch}.pt")
-
-        # Step the scheduler
-        scheduler.step()
-
-    # Final logging
+            }, ckpt_path)
+            print(f"  Checkpoint saved → {ckpt_path}")
+ 
     log = {
         "student_id":         STUDENT_ID,
         "seed":               get_seed(),
         "config":             config,
         "history":            history,
-        "final_val_accuracy": round(val_accuracy, 4),
-        "total_params":       sum(p.numel() for p in model.parameters() if p.requires_grad),
+        "final_val_accuracy": history[-1]["val_accuracy"],
+        "total_params":       total_params,
     }
-
+ 
     if log_path is not None:
-        with open(log_path, "w") as f:
-            json.dump(log, f)
-
+        _save_json(log, log_path)
+ 
     return log
 
 
